@@ -43,6 +43,8 @@ public class MainActivity extends Activity {
     private LinearLayout drawerItems;
     private TextView noLocations;
     private Category pendingCategory;
+    private List<Uri> lastTrees = new ArrayList<>();
+    private List<String> lastNames = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +64,7 @@ public class MainActivity extends Activity {
         scrim.setOnClickListener(v -> closeDrawer());
 
         buildCategories();
+        buildTools();
         updateStorage();
     }
 
@@ -69,6 +72,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshLocations();
+        refreshFavorites();
     }
 
     @Override
@@ -125,6 +129,91 @@ public class MainActivity extends Activity {
             ((TextView) cell.findViewById(R.id.cat_label)).setText(c.label);
             cell.setOnClickListener(v -> openCategory(c));
             row.addView(cell);
+        }
+    }
+
+    // ---------------------------------------------------------------- Herramientas
+
+    private void buildTools() {
+        LinearLayout container = findViewById(R.id.tools_container);
+        addTool(container, R.drawable.ic_tool_trash, R.string.trash, R.color.cat_videos, () -> openList(BrowserActivity.MODE_TRASH));
+        addTool(container, R.drawable.ic_tool_analyze, R.string.analyzer, R.color.cat_docs, this::openAnalyzer);
+        addTool(container, R.drawable.ic_tool_recent, R.string.recent, R.color.cat_archives, () -> openList(BrowserActivity.MODE_RECENT));
+        addTool(container, R.drawable.ic_tool_fav, R.string.favorites, R.color.cat_apk, () -> openList(BrowserActivity.MODE_FAVORITES));
+    }
+
+    private void addTool(LinearLayout container, int icon, int label, int tint, Runnable action) {
+        View cell = getLayoutInflater().inflate(R.layout.item_category, container, false);
+        ImageView iv = cell.findViewById(R.id.cat_icon);
+        iv.setImageResource(icon);
+        iv.setBackgroundTintList(ColorStateList.valueOf(getColor(tint)));
+        ((TextView) cell.findViewById(R.id.cat_label)).setText(label);
+        cell.setOnClickListener(v -> action.run());
+        container.addView(cell);
+    }
+
+    private void openList(int listMode) {
+        closeDrawer();
+        startActivity(BrowserActivity.forList(this, listMode));
+    }
+
+    private void openAnalyzer() {
+        closeDrawer();
+        if (lastTrees.isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.analyzer)
+                    .setMessage(R.string.category_needs_folder)
+                    .setPositiveButton(R.string.add_folder, (d, w) -> pickFolder())
+                    .setNegativeButton(R.string.cancel, null)
+                    .show();
+            return;
+        }
+        if (lastTrees.size() == 1) {
+            startActivity(AnalyzerActivity.intent(this, lastTrees.get(0), null, lastNames.get(0)));
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.analyze_which)
+                .setItems(lastNames.toArray(new CharSequence[0]), (d, which) ->
+                        startActivity(AnalyzerActivity.intent(this, lastTrees.get(which), null, lastNames.get(which))))
+                .show();
+    }
+
+    private void refreshFavorites() {
+        LinearLayout container = findViewById(R.id.favorites_container);
+        container.removeAllViews();
+        List<Store.Entry> favs = Store.get(this, Store.FAVORITES);
+        int shown = Math.min(favs.size(), 5);
+        findViewById(R.id.favorites_title).setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
+        container.setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
+        LayoutInflater inf = getLayoutInflater();
+        for (int i = 0; i < shown; i++) {
+            final Store.Entry e = favs.get(i);
+            final FileItem f = e.toItem();
+            View row = inf.inflate(R.layout.item_location, container, false);
+            ((ImageView) row.findViewById(R.id.loc_icon)).setImageResource(FileTypes.iconFor(f));
+            ((TextView) row.findViewById(R.id.loc_name)).setText(e.name);
+            ((TextView) row.findViewById(R.id.loc_detail)).setText(
+                    e.doc != null ? e.doc.replaceFirst("^primary:", getString(R.string.internal_short) + "/") : "");
+            row.setOnClickListener(v -> {
+                if (f.isDir() && f.treeUri != null) {
+                    startActivity(BrowserActivity.forTreeAt(this, f.treeUri, f.docId, f.name));
+                } else {
+                    FileOpener.open(this, f, null);
+                }
+            });
+            row.findViewById(R.id.loc_remove).setOnClickListener(v -> {
+                Store.remove(this, Store.FAVORITES, e.uri);
+                refreshFavorites();
+            });
+            container.addView(row);
+        }
+        if (favs.size() > shown) {
+            TextView more = (TextView) inf.inflate(R.layout.item_drawer, container, false);
+            more.setText(R.string.see_all);
+            more.setTextColor(getColor(R.color.primary));
+            more.setOnClickListener(v -> openList(BrowserActivity.MODE_FAVORITES));
+            container.addView(more);
         }
     }
 
@@ -210,6 +299,8 @@ public class MainActivity extends Activity {
 
     private void showLocations(List<Uri> trees, List<String> names) {
         if (isFinishing()) return;
+        lastTrees = trees;
+        lastNames = names;
         locationsContainer.removeAllViews();
         noLocations.setVisibility(trees.isEmpty() ? View.VISIBLE : View.GONE);
         LayoutInflater inf = getLayoutInflater();
@@ -290,6 +381,11 @@ public class MainActivity extends Activity {
                     () -> { closeDrawer(); startActivity(BrowserActivity.forTree(this, t)); });
         }
         addDrawerItem(R.drawable.ic_add, getString(R.string.add_folder), this::pickFolder);
+        addDrawerDivider();
+        addDrawerItem(R.drawable.ic_star, getString(R.string.favorites), () -> openList(BrowserActivity.MODE_FAVORITES));
+        addDrawerItem(R.drawable.ic_restore, getString(R.string.recent), () -> openList(BrowserActivity.MODE_RECENT));
+        addDrawerItem(R.drawable.ic_delete, getString(R.string.trash), () -> openList(BrowserActivity.MODE_TRASH));
+        addDrawerItem(R.drawable.ic_grid, getString(R.string.analyzer), this::openAnalyzer);
         addDrawerDivider();
         addDrawerItem(R.drawable.ic_shield, getString(R.string.privacy), () -> { closeDrawer(); showPrivacy(); });
         addDrawerItem(R.drawable.ic_info, getString(R.string.about), () -> { closeDrawer(); showAbout(); });

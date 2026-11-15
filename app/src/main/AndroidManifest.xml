@@ -46,6 +46,28 @@
         </activity>
 
         <activity
+            android:name=".ImageViewerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.MyFile.Dark" />
+
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.MyFile.Dark" />
+
+        <activity
+            android:name=".EditorActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".AnalyzerActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".BrowserActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity"

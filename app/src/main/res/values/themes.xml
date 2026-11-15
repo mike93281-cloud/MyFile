@@ -11,6 +11,13 @@
         <item name="android:textColorSecondary">@color/text_secondary</item>
     </style>
 
+    <style name="Theme.MyFile.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#4FD1C5</item>
+        <item name="android:statusBarColor">#FF000000</item>
+        <item name="android:navigationBarColor">#FF000000</item>
+        <item name="android:windowBackground">#FF000000</item>
+    </style>
+
     <style name="TopBarButton">
         <item name="android:layout_width">48dp</item>
         <item name="android:layout_height">48dp</item>
