@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#0E6E66</color>
+    <color name="primary_dark">#0A524C</color>
+    <color name="accent">#F59E0B</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="bg">#F3F5F7</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="text_primary">#1D2329</color>
+    <color name="text_secondary">#66707A</color>
+    <color name="divider">#E1E5EA</color>
+    <color name="selected">#D3EEEA</color>
+    <color name="scrim">#80000000</color>
+    <color name="cat_images">#E8F1FF</color>
+    <color name="cat_videos">#FDECEC</color>
+    <color name="cat_music">#F3EAFE</color>
+    <color name="cat_docs">#E6F6EE</color>
+    <color name="cat_apk">#EAF7E2</color>
+    <color name="cat_archives">#FFF3DD</color>
+    <color name="launcher_bg">#0E6E66</color>
+</resources>

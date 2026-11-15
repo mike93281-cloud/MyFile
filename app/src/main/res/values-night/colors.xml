@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#0B4F49</color>
+    <color name="primary_dark">#073833</color>
+    <color name="bg">#121417</color>
+    <color name="surface">#1E2226</color>
+    <color name="text_primary">#E9ECEF</color>
+    <color name="text_secondary">#9AA4AD</color>
+    <color name="divider">#2C3237</color>
+    <color name="selected">#1F4A45</color>
+    <color name="cat_images">#1D2A3D</color>
+    <color name="cat_videos">#3A2224</color>
+    <color name="cat_music">#2E2440</color>
+    <color name="cat_docs">#1C3329</color>
+    <color name="cat_apk">#22331A</color>
+    <color name="cat_archives">#3A3020</color>
+</resources>
