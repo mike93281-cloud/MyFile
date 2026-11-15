@@ -15,6 +15,14 @@ public final class FileTypes {
             "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst"));
     public static final Set<String> APK_EXT = new HashSet<>(Arrays.asList("apk", "apks", "xapk"));
 
+    public static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
+            "txt", "md", "json", "xml", "csv", "log", "ini", "conf", "cfg", "properties", "yml", "yaml",
+            "html", "htm", "css", "js", "ts", "java", "kt", "py", "sh", "c", "h", "cpp", "srt", "nfo"));
+
+    public static boolean isText(FileItem f) {
+        return TEXT_EXT.contains(f.extension()) || f.mime.startsWith("text/");
+    }
+
     public static boolean isImage(FileItem f) { return f.mime.startsWith("image/"); }
     public static boolean isVideo(FileItem f) { return f.mime.startsWith("video/"); }
     public static boolean isAudio(FileItem f) { return f.mime.startsWith("audio/"); }

@@ -10,6 +10,12 @@ Gestor de archivos para Android, sencillo y privado. Funciona desde Android 7.0 
 - Copiar, mover, renombrar, eliminar, compartir, crear carpetas, ver detalles.
 - Búsqueda por nombre dentro de una carpeta o en todas tus carpetas.
 - Ordenar por nombre, fecha o tamaño.
+- **Papelera**: lo que borras de tus carpetas se puede restaurar (las fotos, vídeos y música usan la papelera del sistema en Android 11+).
+- **Favoritos** y **Recientes**.
+- **Editor de texto**, **visor de fotos** (zoom y deslizar) y **reproductor de vídeo y música** integrados.
+- **Comprimir y descomprimir ZIP** (con protección contra rutas maliciosas tipo `../`).
+- **Analizador de almacenamiento**: qué carpetas ocupan más.
+- Mostrar u ocultar archivos ocultos; tamaño total de carpetas en Detalles.
 - Tema claro y oscuro automático. Español e inglés.
 
 ## Privacidad y permisos
@@ -34,6 +40,7 @@ Además: `allowBackup="false"` y reglas que excluyen todo de la copia en la nube
 - Desde Android 11, el selector del sistema no deja elegir la raíz del almacenamiento ni la carpeta *Download* entera; elige subcarpetas (por ejemplo `DCIM`, `Documents`, o una carpeta dentro de `Download`).
 - MyFile no instala APK (no tiene `REQUEST_INSTALL_PACKAGES`).
 - Las categorías Documentos, APK y Comprimidos buscan dentro de las carpetas que hayas añadido.
+- No incluye funciones de red, nube, gestor de apps ni root: requerirían permisos que van contra la privacidad.
 
 ## Cómo compilar
 

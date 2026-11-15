@@ -61,6 +61,9 @@ public class BrowserActivity extends Activity {
     private static final int MODE_TREE = 0;
     private static final int MODE_CATEGORY = 1;
     private static final int MODE_SEARCH = 2;
+    public static final int MODE_FAVORITES = 3;
+    public static final int MODE_RECENT = 4;
+    public static final int MODE_TRASH = 5;
 
     private static final int SORT_NAME = 0;
     private static final int SORT_DATE = 1;
@@ -80,6 +83,11 @@ public class BrowserActivity extends Activity {
     public static Intent forCategory(Context ctx, Category c) {
         return new Intent(ctx, BrowserActivity.class).putExtra(EXTRA_MODE, MODE_CATEGORY)
                 .putExtra(EXTRA_CATEGORY, c.name());
+    }
+
+    /** Favoritos, recientes o papelera. */
+    public static Intent forList(Context ctx, int listMode) {
+        return new Intent(ctx, BrowserActivity.class).putExtra(EXTRA_MODE, listMode);
     }
 
     public static Intent forSearch(Context ctx, String query) {
@@ -121,7 +129,8 @@ public class BrowserActivity extends Activity {
     private View pasteBar;
     private TextView pasteInfo;
     private LinearLayout actionBar;
-    private TextView actCopy, actMove, actRename, actShare, actDelete, actInfo;
+    private TextView actCopy, actMove, actRename, actShare, actDelete, actMore;
+    private TextView actRestore, actPurge, actInfo;
 
     private AtomicBoolean loadCancel = new AtomicBoolean();
     private int generation;
@@ -152,7 +161,7 @@ public class BrowserActivity extends Activity {
             stackIds.add(doc);
         } else if (mode == MODE_CATEGORY) {
             category = Category.valueOf(in.getStringExtra(EXTRA_CATEGORY));
-        } else {
+        } else if (mode == MODE_SEARCH) {
             globalQuery = in.getStringExtra(EXTRA_QUERY);
         }
 
@@ -260,12 +269,18 @@ public class BrowserActivity extends Activity {
     }
 
     private void setupActions() {
+        if (mode == MODE_TRASH) {
+            actRestore = addAction(R.drawable.ic_restore, R.string.restore, v -> restoreSelected());
+            actPurge = addAction(R.drawable.ic_delete, R.string.delete_forever, v -> confirmPurge(selectedItems()));
+            actInfo = addAction(R.drawable.ic_info, R.string.details, v -> showDetails());
+            return;
+        }
         actCopy = addAction(R.drawable.ic_copy, R.string.copy, v -> toClipboard(false));
         actMove = addAction(R.drawable.ic_move, R.string.move, v -> toClipboard(true));
         actRename = addAction(R.drawable.ic_rename, R.string.rename, v -> askRename());
         actShare = addAction(R.drawable.ic_share, R.string.share, v -> share());
         actDelete = addAction(R.drawable.ic_delete, R.string.delete, v -> confirmDelete());
-        actInfo = addAction(R.drawable.ic_info, R.string.details, v -> showDetails());
+        actMore = addAction(R.drawable.ic_more, R.string.more, this::showSelectionMenu);
     }
 
     private TextView addAction(int icon, int label, View.OnClickListener l) {
@@ -316,6 +331,13 @@ public class BrowserActivity extends Activity {
                 title.setText(category.label);
                 subtitle.setText(getResources().getQuantityString(R.plurals.items, items.size(), items.size()));
                 break;
+            case MODE_FAVORITES:
+            case MODE_RECENT:
+            case MODE_TRASH:
+                title.setText(mode == MODE_FAVORITES ? R.string.favorites
+                        : mode == MODE_RECENT ? R.string.recent : R.string.trash);
+                subtitle.setText(getResources().getQuantityString(R.plurals.items, items.size(), items.size()));
+                break;
             default:
                 title.setText(getString(R.string.results_for, globalQuery));
                 subtitle.setText(getResources().getQuantityString(R.plurals.items, items.size(), items.size()));
@@ -351,6 +373,12 @@ public class BrowserActivity extends Activity {
 
     private void updateActionStates() {
         List<FileItem> sel = selectedItems();
+        if (mode == MODE_TRASH) {
+            enable(actRestore, !sel.isEmpty());
+            enable(actPurge, !sel.isEmpty());
+            enable(actInfo, sel.size() == 1);
+            return;
+        }
         boolean allDocs = true, anyDir = false;
         for (FileItem f : sel) {
             if (!f.isDocument()) allDocs = false;
@@ -361,7 +389,7 @@ public class BrowserActivity extends Activity {
         enable(actRename, allDocs && sel.size() == 1);
         enable(actShare, !anyDir && !sel.isEmpty());
         enable(actDelete, !sel.isEmpty());
-        enable(actInfo, sel.size() == 1);
+        enable(actMore, !sel.isEmpty());
     }
 
     private static void enable(View v, boolean on) {
@@ -397,11 +425,13 @@ public class BrowserActivity extends Activity {
             } catch (Exception e) {
                 failed = true;
             }
-            sort(result);
+            final List<FileItem> shown = visible(result);
+            if (mode != MODE_RECENT && mode != MODE_TRASH) sort(shown);
+            else Collections.sort(shown, (a, b) -> Long.compare(b.modified, a.modified));
             final boolean error = failed;
             main.post(() -> {
                 if (gen != generation || isFinishing() || isDestroyed()) return;
-                showResult(result, error);
+                showResult(shown, error);
             });
         });
     }
@@ -438,12 +468,62 @@ public class BrowserActivity extends Activity {
                     }
                 }
                 break;
+            case MODE_FAVORITES:
+                out.addAll(resolveEntries(cr, Store.FAVORITES));
+                break;
+            case MODE_RECENT:
+                out.addAll(resolveEntries(cr, Store.RECENT));
+                break;
+            case MODE_TRASH:
+                out.addAll(resolveEntries(cr, Store.TRASH));
+                break;
             default:
                 SafOps.Filter f = SafOps.nameContains(globalQuery);
                 for (Uri t : SafOps.grantedTrees(cr)) {
                     SafOps.search(cr, t, SafOps.rootDocId(t), f, out, SEARCH_LIMIT, cancel);
                 }
         }
+    }
+
+    /** Convierte lo guardado en elementos reales; descarta lo que ya no existe. */
+    private List<FileItem> resolveEntries(ContentResolver cr, String key) {
+        List<FileItem> out = new ArrayList<>();
+        List<Store.Entry> entries = Store.get(this, key);
+        boolean changed = false;
+        for (Store.Entry e : entries.toArray(new Store.Entry[0])) {
+            FileItem f = null;
+            if (e.tree != null) {
+                FileItem live = SafOps.query(cr, e.treeUri(), e.doc, e.parent);
+                if (live != null) {
+                    // En la papelera se muestra el nombre y la fecha de borrado.
+                    f = Store.TRASH.equals(key)
+                            ? new FileItem(live.uri, live.treeUri, live.docId, e.trashDir, e.name,
+                                    live.mime, live.size, e.time, live.flags)
+                            : live;
+                }
+            } else {
+                f = e.toItem();
+            }
+            if (f == null) {
+                entries.remove(e);
+                changed = true;
+            } else {
+                out.add(f);
+            }
+        }
+        if (changed) Store.put(this, key, entries);
+        return out;
+    }
+
+    private List<FileItem> visible(List<FileItem> list) {
+        boolean hidden = Store.showHidden(this);
+        List<FileItem> out = new ArrayList<>();
+        for (FileItem f : list) {
+            if (f.isDir() && SafOps.TRASH_NAME.equals(f.name) && mode != MODE_TRASH) continue;
+            if (!hidden && mode != MODE_TRASH && f.name.startsWith(".")) continue;
+            out.add(f);
+        }
+        return out;
     }
 
     private void sort(List<FileItem> list) {
@@ -475,6 +555,9 @@ public class BrowserActivity extends Activity {
             empty.setVisibility(View.VISIBLE);
             if (error) emptyText.setText(R.string.load_error);
             else if (localQuery != null || mode == MODE_SEARCH) emptyText.setText(R.string.no_results);
+            else if (mode == MODE_FAVORITES) emptyText.setText(R.string.no_favorites);
+            else if (mode == MODE_RECENT) emptyText.setText(R.string.no_recent);
+            else if (mode == MODE_TRASH) emptyText.setText(R.string.trash_empty);
             else emptyText.setText(R.string.empty_folder);
         }
     }
@@ -496,7 +579,22 @@ public class BrowserActivity extends Activity {
             }
             return;
         }
-        open(f);
+        if (mode == MODE_TRASH) {
+            toggleSelection(f);
+            return;
+        }
+        if (ZipOps.isZip(f) && f.isDocument()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(f.name)
+                    .setItems(new CharSequence[]{getString(R.string.extract_here), getString(R.string.open_with)},
+                            (d, which) -> {
+                                if (which == 0) extract(f);
+                                else FileOpener.openExternal(this, f);
+                            })
+                    .show();
+            return;
+        }
+        FileOpener.open(this, f, items);
     }
 
     private void toggleSelection(FileItem f) {
@@ -566,6 +664,13 @@ public class BrowserActivity extends Activity {
         m.setGroupCheckable(1, true, true);
         m.add(2, 13, 5, asc ? R.string.sort_desc : R.string.sort_asc);
         m.add(2, 3, 6, R.string.refresh);
+        m.add(3, 20, 7, R.string.show_hidden).setCheckable(true).setChecked(Store.showHidden(this));
+        if (mode == MODE_TREE) {
+            m.add(3, 21, 8, R.string.analyze_folder);
+            m.add(3, 22, 9, R.string.add_current_favorite);
+        }
+        if (mode == MODE_TRASH) m.add(3, 23, 10, R.string.empty_trash);
+        if (mode == MODE_RECENT) m.add(3, 24, 10, R.string.clear_recent);
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: askNewFolder(); return true;
@@ -574,6 +679,30 @@ public class BrowserActivity extends Activity {
                 case 10: setSort(SORT_NAME); return true;
                 case 11: setSort(SORT_DATE); return true;
                 case 12: setSort(SORT_SIZE); return true;
+                case 20:
+                    Store.setShowHidden(this, !Store.showHidden(this));
+                    load();
+                    return true;
+                case 21:
+                    startActivity(AnalyzerActivity.intent(this, tree, currentDocId(),
+                            stackNames.get(stackNames.size() - 1)));
+                    return true;
+                case 22: {
+                    FileItem cur = SafOps.query(getContentResolver(), tree, currentDocId(),
+                            stackIds.size() > 1 ? stackIds.get(stackIds.size() - 2) : null);
+                    if (cur != null && !Store.contains(this, Store.FAVORITES, cur.uri.toString())) {
+                        Store.toggleFavorite(this, cur);
+                    }
+                    Toast.makeText(this, R.string.added_favorite, Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+                case 23:
+                    confirmPurge(new ArrayList<>(items));
+                    return true;
+                case 24:
+                    Store.put(this, Store.RECENT, new ArrayList<>());
+                    load();
+                    return true;
                 case 13:
                     prefs.edit().putBoolean("asc", !prefs.getBoolean("asc", true)).apply();
                     resort();
@@ -597,30 +726,7 @@ public class BrowserActivity extends Activity {
     // ================================================================ Abrir y compartir
 
     private String bestMime(FileItem f) {
-        if (!"application/octet-stream".equals(f.mime)) return f.mime;
-        String guess = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension());
-        return guess != null ? guess : "*/*";
-    }
-
-    private void open(FileItem f) {
-        if (FileTypes.isApk(f)) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.apk_title)
-                    .setMessage(R.string.apk_msg)
-                    .setPositiveButton(android.R.string.ok, null)
-                    .show();
-            return;
-        }
-        Intent i = new Intent(Intent.ACTION_VIEW);
-        i.setDataAndType(f.uri, bestMime(f));
-        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            startActivity(i);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, R.string.no_app, Toast.LENGTH_SHORT).show();
-        } catch (SecurityException e) {
-            Toast.makeText(this, R.string.load_error, Toast.LENGTH_SHORT).show();
-        }
+        return FileOpener.bestMime(f);
     }
 
     private void share() {
@@ -730,19 +836,36 @@ public class BrowserActivity extends Activity {
     private void confirmDelete() {
         final List<FileItem> sel = selectedItems();
         if (sel.isEmpty()) return;
-        String msg = sel.size() == 1
-                ? getString(R.string.delete_one, sel.get(0).name)
-                : getResources().getQuantityString(R.plurals.delete_many, sel.size(), sel.size());
+        String what = sel.size() == 1 ? "«" + sel.get(0).name + "»"
+                : getResources().getQuantityString(R.plurals.items, sel.size(), sel.size());
         new AlertDialog.Builder(this)
                 .setTitle(R.string.delete)
-                .setMessage(msg)
-                .setPositiveButton(R.string.delete, (d, w) -> delete(sel))
+                .setMessage(getString(R.string.delete_to_trash_msg, what))
+                .setPositiveButton(R.string.move_to_trash, (d, w) -> delete(sel, false))
+                .setNeutralButton(R.string.delete_forever, (d, w) -> confirmPurge(sel))
                 .setNegativeButton(R.string.cancel, null)
                 .show();
     }
 
+    private void confirmPurge(List<FileItem> sel) {
+        if (sel.isEmpty()) return;
+        String msg = sel.size() == 1
+                ? getString(R.string.delete_one, sel.get(0).name)
+                : getResources().getQuantityString(R.plurals.delete_many, sel.size(), sel.size());
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.delete_forever)
+                .setMessage(msg)
+                .setPositiveButton(R.string.delete, (d, w) -> delete(sel, true))
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    /**
+     * Borra. Sin {@code forever}, los archivos de tus carpetas van a la papelera de MyFile y las
+     * fotos/vídeos/música a la papelera del sistema (Android 11+), que pide confirmación.
+     */
     @SuppressWarnings("deprecation")
-    private void delete(List<FileItem> sel) {
+    private void delete(List<FileItem> sel, boolean forever) {
         List<Uri> media = new ArrayList<>();
         List<FileItem> docs = new ArrayList<>();
         for (FileItem f : sel) {
@@ -750,8 +873,9 @@ public class BrowserActivity extends Activity {
             else media.add(f.uri);
         }
         if (!media.isEmpty() && Build.VERSION.SDK_INT >= 30) {
-            // Android pide confirmación al usuario: la app no puede borrar fotos por su cuenta.
-            PendingIntent pi = MediaStore.createDeleteRequest(getContentResolver(), media);
+            PendingIntent pi = forever
+                    ? MediaStore.createDeleteRequest(getContentResolver(), media)
+                    : MediaStore.createTrashRequest(getContentResolver(), media, true);
             try {
                 startIntentSenderForResult(pi.getIntentSender(), REQ_MEDIA_DELETE, null, 0, 0, 0);
             } catch (Exception e) {
@@ -760,11 +884,19 @@ public class BrowserActivity extends Activity {
             media.clear();
         }
         final List<Uri> legacyMedia = media;
+        final boolean inTrashView = mode == MODE_TRASH;
         runOp(() -> {
             int failed = 0;
             for (FileItem f : docs) {
                 try {
-                    if (!SafOps.delete(getContentResolver(), f)) failed++;
+                    if (forever || inTrashView) {
+                        if (!SafOps.delete(getContentResolver(), f)) failed++;
+                        Store.remove(this, Store.TRASH, f.uri.toString());
+                    } else {
+                        moveToTrash(f);
+                    }
+                    Store.remove(this, Store.FAVORITES, f.uri.toString());
+                    Store.remove(this, Store.RECENT, f.uri.toString());
                 } catch (Exception e) {
                     failed++;
                 }
@@ -772,12 +904,162 @@ public class BrowserActivity extends Activity {
             for (Uri u : legacyMedia) {
                 try {
                     getContentResolver().delete(u, null, null);
+                    Store.remove(this, Store.RECENT, u.toString());
                 } catch (Exception e) {
                     failed++;
                 }
             }
             if (failed > 0) throw new Exception(failed + " fallidos");
-        }, R.string.deleted);
+        }, forever || inTrashView ? R.string.deleted : R.string.moved_to_trash);
+    }
+
+    private void moveToTrash(FileItem f) throws Exception {
+        String trashId = SafOps.trashDir(getContentResolver(), f.treeUri);
+        Uri moved = SafOps.move(getContentResolver(), f, f.treeUri, trashId, new AtomicBoolean());
+        if (moved == null) throw new Exception("move");
+        Store.Entry e = new Store.Entry();
+        e.uri = moved.toString();
+        e.tree = f.treeUri.toString();
+        e.doc = android.provider.DocumentsContract.getDocumentId(moved);
+        e.parent = f.parentDocId;
+        e.trashDir = trashId;
+        e.name = f.name;
+        e.mime = f.mime;
+        e.time = System.currentTimeMillis();
+        Store.add(this, Store.TRASH, e, 0);
+    }
+
+    private void restoreSelected() {
+        final List<FileItem> sel = selectedItems();
+        if (sel.isEmpty()) return;
+        final List<Store.Entry> entries = Store.get(this, Store.TRASH);
+        runOp(() -> {
+            int failed = 0;
+            for (FileItem f : sel) {
+                Store.Entry match = null;
+                for (Store.Entry e : entries) if (e.uri.equals(f.uri.toString())) match = e;
+                try {
+                    String dest = match != null && match.parent != null ? match.parent : SafOps.rootDocId(f.treeUri);
+                    if (SafOps.query(getContentResolver(), f.treeUri, dest, null) == null) {
+                        dest = SafOps.rootDocId(f.treeUri);
+                    }
+                    Uri back = SafOps.move(getContentResolver(), f, f.treeUri, dest, new AtomicBoolean());
+                    if (back == null) throw new Exception();
+                    Store.remove(this, Store.TRASH, f.uri.toString());
+                } catch (Exception e) {
+                    failed++;
+                }
+            }
+            if (failed > 0) throw new Exception(failed + " fallidos");
+        }, R.string.restored);
+    }
+
+    // ================================================================ Más acciones (selección)
+
+    private void showSelectionMenu(View anchor) {
+        final List<FileItem> sel = selectedItems();
+        if (sel.isEmpty()) return;
+        boolean allDocs = true;
+        for (FileItem f : sel) if (!f.isDocument()) allDocs = false;
+        FileItem one = sel.size() == 1 ? sel.get(0) : null;
+        PopupMenu pm = new PopupMenu(this, anchor);
+        Menu m = pm.getMenu();
+        if (one != null) {
+            boolean fav = Store.contains(this, Store.FAVORITES, one.uri.toString());
+            m.add(0, 1, 0, fav ? R.string.remove_favorite : R.string.add_favorite);
+        }
+        if (allDocs && compressTarget(sel.get(0)) != null) m.add(0, 2, 1, R.string.compress);
+        if (one != null && one.isDocument() && ZipOps.isZip(one)) m.add(0, 3, 2, R.string.extract_here);
+        if (one != null && !one.isDir()) m.add(0, 4, 3, R.string.open_with);
+        if (one != null) m.add(0, 5, 4, R.string.details);
+        pm.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: {
+                    boolean nowFav = Store.toggleFavorite(this, one);
+                    Toast.makeText(this, nowFav ? R.string.added_favorite : R.string.removed_favorite,
+                            Toast.LENGTH_SHORT).show();
+                    clearSelection();
+                    if (mode == MODE_FAVORITES) load();
+                    return true;
+                }
+                case 2: askCompress(sel); return true;
+                case 3: extract(one); return true;
+                case 4: FileOpener.openExternal(this, one); return true;
+                case 5: showDetails(); return true;
+                default: return false;
+            }
+        });
+        pm.show();
+    }
+
+    /** Carpeta donde dejar un ZIP o una extracción: la actual o la del propio archivo. */
+    private String compressTarget(FileItem f) {
+        if (mode == MODE_TREE && localQuery == null) return currentDocId();
+        return f.parentDocId;
+    }
+
+    private void askCompress(List<FileItem> sel) {
+        final FileItem first = sel.get(0);
+        final String dest = compressTarget(first);
+        if (dest == null) return;
+        String suggested = (sel.size() == 1 ? first.name.replaceFirst("\\.[^.]+$", "") : getString(R.string.archive_default)) + ".zip";
+        if (sel.size() == 1 && first.isDir()) suggested = first.name + ".zip";
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle(R.string.compress);
+        EditText input = inputDialogView(b, suggested);
+        b.setPositiveButton(R.string.compress, (d, w) -> {
+            String name = input.getText().toString().trim();
+            if (!validName(name)) {
+                Toast.makeText(this, R.string.invalid_name, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (!name.toLowerCase(Locale.ROOT).endsWith(".zip")) name += ".zip";
+            final String zipName = name;
+            runWithProgress(R.string.compressing,
+                    cancel -> ZipOps.compress(getContentResolver(), sel, first.treeUri, dest, zipName, cancel),
+                    R.string.compressed);
+        });
+        b.setNegativeButton(R.string.cancel, null);
+        b.show();
+    }
+
+    private void extract(FileItem zip) {
+        final String dest = compressTarget(zip);
+        if (dest == null) return;
+        runWithProgress(R.string.extracting,
+                cancel -> ZipOps.extract(getContentResolver(), zip, zip.treeUri, dest, cancel),
+                R.string.extracted);
+    }
+
+    private interface CancellableOp {
+        void run(AtomicBoolean cancel) throws Exception;
+    }
+
+    private void runWithProgress(int titleRes, CancellableOp op, int okMessage) {
+        clearSelection();
+        final AtomicBoolean cancel = new AtomicBoolean();
+        final AlertDialog progress = new AlertDialog.Builder(this)
+                .setTitle(titleRes)
+                .setMessage(R.string.please_wait)
+                .setCancelable(false)
+                .setNegativeButton(R.string.cancel, (d, w) -> cancel.set(true))
+                .show();
+        io.execute(() -> {
+            boolean ok;
+            try {
+                op.run(cancel);
+                ok = true;
+            } catch (Exception e) {
+                ok = false;
+            }
+            final boolean success = ok;
+            main.post(() -> {
+                if (isDestroyed()) return;
+                progress.dismiss();
+                int msg = cancel.get() ? R.string.cancelled : (success ? okMessage : R.string.op_failed);
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                load();
+            });
+        });
     }
 
     @Override
@@ -859,11 +1141,25 @@ public class BrowserActivity extends Activity {
         if (f.isDocument() && f.docId != null) {
             line(sb, R.string.d_location, f.docId.replaceFirst("^primary:", getString(R.string.internal_short) + "/"));
         }
-        new AlertDialog.Builder(this)
+        final String base = sb.toString().trim();
+        final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.details)
-                .setMessage(sb.toString().trim())
+                .setMessage(f.isDir() && f.isDocument() ? base + "\n\n" + getString(R.string.calculating) : base)
                 .setPositiveButton(android.R.string.ok, null)
                 .show();
+        if (f.isDir() && f.isDocument()) {
+            final AtomicBoolean cancel = new AtomicBoolean();
+            dialog.setOnDismissListener(d -> cancel.set(true));
+            new Thread(() -> {
+                long[] r = SafOps.sizeOf(getContentResolver(), f.treeUri, f.docId, cancel);
+                main.post(() -> {
+                    if (cancel.get() || !dialog.isShowing()) return;
+                    dialog.setMessage(base + "\n\n" + getString(R.string.d_size) + ": "
+                            + Formatter.formatFileSize(this, r[0]) + "\n"
+                            + getResources().getQuantityString(R.plurals.files, (int) r[1], (int) r[1]));
+                });
+            }).start();
+        }
     }
 
     private void line(StringBuilder sb, int label, String value) {

@@ -32,6 +32,9 @@ public final class SafOps {
             Document.COLUMN_FLAGS,
     };
 
+    /** Carpeta oculta (en la raíz de cada carpeta concedida) que hace de papelera. */
+    public static final String TRASH_NAME = ".MyFile-Papelera";
+
     public interface Filter {
         boolean accept(FileItem f);
     }
@@ -83,6 +86,7 @@ public final class SafOps {
         }
         for (FileItem f : children) {
             if (cancel.get() || out.size() >= limit) return;
+            if (f.isDir() && TRASH_NAME.equals(f.name)) continue;
             if (filter.accept(f)) out.add(f);
             if (f.isDir()) search(cr, treeUri, f.docId, filter, out, limit, cancel);
         }
@@ -114,9 +118,9 @@ public final class SafOps {
         return destDocId.equals(src.docId) || destDocId.startsWith(src.docId + "/");
     }
 
-    public static void copy(ContentResolver cr, FileItem src, Uri destTree, String destDocId,
-                            AtomicBoolean cancel) throws IOException {
-        if (cancel.get()) return;
+    public static Uri copy(ContentResolver cr, FileItem src, Uri destTree, String destDocId,
+                           AtomicBoolean cancel) throws IOException {
+        if (cancel.get()) return null;
         Uri destParent = DocumentsContract.buildDocumentUriUsingTree(destTree, destDocId);
         if (src.isDir()) {
             Uri newDir = DocumentsContract.createDocument(cr, destParent, Document.MIME_TYPE_DIR, src.name);
@@ -125,7 +129,7 @@ public final class SafOps {
             for (FileItem child : list(cr, src.treeUri, src.docId)) {
                 copy(cr, child, destTree, newDirId, cancel);
             }
-            return;
+            return newDir;
         }
         Uri target = DocumentsContract.createDocument(cr, destParent, src.mime, src.name);
         if (target == null) throw new IOException("No se pudo crear " + src.name);
@@ -141,23 +145,65 @@ public final class SafOps {
         }
         if (cancel.get()) {
             try { DocumentsContract.deleteDocument(cr, target); } catch (Exception ignored) { }
+            return null;
         }
+        return target;
     }
 
-    public static void move(ContentResolver cr, FileItem src, Uri destTree, String destDocId,
-                            AtomicBoolean cancel) throws IOException {
+    /** Mueve y devuelve la nueva Uri (o null si se canceló). */
+    public static Uri move(ContentResolver cr, FileItem src, Uri destTree, String destDocId,
+                           AtomicBoolean cancel) throws IOException {
         boolean sameProvider = src.treeUri.getAuthority().equals(destTree.getAuthority());
         if (sameProvider && src.parentDocId != null && src.has(Document.FLAG_SUPPORTS_MOVE)) {
             try {
                 Uri srcParent = DocumentsContract.buildDocumentUriUsingTree(src.treeUri, src.parentDocId);
                 Uri destParent = DocumentsContract.buildDocumentUriUsingTree(destTree, destDocId);
-                if (DocumentsContract.moveDocument(cr, src.uri, srcParent, destParent) != null) return;
+                Uri moved = DocumentsContract.moveDocument(cr, src.uri, srcParent, destParent);
+                if (moved != null) return moved;
             } catch (Exception ignored) {
                 // Si el proveedor no lo permite, se copia y se borra.
             }
         }
-        copy(cr, src, destTree, destDocId, cancel);
-        if (!cancel.get()) DocumentsContract.deleteDocument(cr, src.uri);
+        Uri copied = copy(cr, src, destTree, destDocId, cancel);
+        if (copied == null || cancel.get()) return null;
+        DocumentsContract.deleteDocument(cr, src.uri);
+        return copied;
+    }
+
+    /** Id de la carpeta papelera de esta carpeta concedida; la crea si no existe. */
+    public static String trashDir(ContentResolver cr, Uri treeUri) throws IOException {
+        String root = rootDocId(treeUri);
+        for (FileItem f : list(cr, treeUri, root)) {
+            if (f.isDir() && TRASH_NAME.equals(f.name)) return f.docId;
+        }
+        Uri created = createFolder(cr, treeUri, root, TRASH_NAME);
+        if (created == null) throw new IOException("No se pudo crear la papelera");
+        return DocumentsContract.getDocumentId(created);
+    }
+
+    /** Tamaño total y número de archivos de una carpeta (recursivo). */
+    public static long[] sizeOf(ContentResolver cr, Uri treeUri, String docId, AtomicBoolean cancel) {
+        long[] acc = new long[2];
+        sizeOf(cr, treeUri, docId, cancel, acc);
+        return acc;
+    }
+
+    private static void sizeOf(ContentResolver cr, Uri treeUri, String docId, AtomicBoolean cancel, long[] acc) {
+        List<FileItem> children;
+        try {
+            children = list(cr, treeUri, docId);
+        } catch (Exception e) {
+            return;
+        }
+        for (FileItem f : children) {
+            if (cancel.get()) return;
+            if (f.isDir()) {
+                sizeOf(cr, treeUri, f.docId, cancel, acc);
+            } else {
+                acc[0] += Math.max(0, f.size);
+                acc[1]++;
+            }
+        }
     }
 
     private static FileItem fromCursor(Cursor c, Uri treeUri, String parentDocId) {
